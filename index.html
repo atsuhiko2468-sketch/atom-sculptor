@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Astro Sculptor: Full Game Loop</title>
+    <title>Astro Sculptor: UX Polished</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }</style>
 </head>
 <body>
@@ -19,7 +19,7 @@
         import { VRButton } from 'three/addons/webxr/VRButton.js';
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x04040a); // 深い宇宙の色
+        scene.background = new THREE.Color(0x04040a); 
         scene.fog = new THREE.Fog(0x04040a, 5, 40);
         
         const playerRig = new THREE.Group();
@@ -37,8 +37,7 @@
         const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
         playerRig.add(p1, p2, new THREE.AmbientLight(0x333333));
 
-        // --- 状態管理 ---
-        let GAME_STATE = 'START'; // 'START', 'PLAYING', 'RESULT'
+        let GAME_STATE = 'START'; 
         let strokeHistory = []; 
         let dashVelocity = new THREE.Vector3();
         const WEAPON_RADIUS = 0.015;
@@ -46,23 +45,18 @@
         let clearTime = 0;
 
         // --- 1. 3D UIパネルジェネレーター ---
-        // 2DのCanvasに描画したものを、3D空間のテクスチャとして貼り付けます
         function createUIPanel(type, data = {}) {
             const canvas = document.createElement('canvas');
             canvas.width = 1024; canvas.height = 512;
             const ctx = canvas.getContext('2d');
 
-            // 背景（半透明のサイバーなパネル）
             ctx.fillStyle = 'rgba(10, 10, 20, 0.8)';
             ctx.fillRect(0, 0, 1024, 512);
-            ctx.strokeStyle = '#00ffff';
-            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 4;
             ctx.strokeRect(10, 10, 1004, 492);
-
             ctx.textAlign = 'center';
             
             if (type === 'START') {
-                // タイトルロゴ
                 ctx.shadowBlur = 20; ctx.shadowColor = '#ff00ff';
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 90px sans-serif';
                 ctx.fillText('ASTRO SCULPTOR', 512, 180);
@@ -70,14 +64,11 @@
                 ctx.shadowColor = '#00ffff'; ctx.font = '30px sans-serif';
                 ctx.fillText('―― 宇宙の彫刻家 ――', 512, 240);
 
-                // スタートボタン（当たり判定用エリア）
                 ctx.shadowBlur = 15; ctx.shadowColor = '#00ff00';
-                ctx.fillStyle = '#00aa00';
-                ctx.fillRect(362, 320, 300, 80);
+                ctx.fillStyle = '#00aa00'; ctx.fillRect(362, 320, 300, 80);
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 40px sans-serif';
                 ctx.fillText('START', 512, 375);
-            } 
-            else if (type === 'RESULT') {
+            } else if (type === 'RESULT') {
                 ctx.shadowBlur = 20; ctx.shadowColor = '#ffff00';
                 ctx.fillStyle = '#ffdd00'; ctx.font = 'bold 80px sans-serif';
                 ctx.fillText('STAGE CLEAR!', 512, 120);
@@ -90,10 +81,8 @@
                 ctx.fillStyle = '#ff88ff'; ctx.font = 'bold 70px sans-serif';
                 ctx.fillText(`RANK: ${data.rank}`, 512, 300);
 
-                // リプレイボタン
                 ctx.shadowBlur = 15; ctx.shadowColor = '#00ffff';
-                ctx.fillStyle = '#00aaaa';
-                ctx.fillRect(362, 380, 300, 80);
+                ctx.fillStyle = '#00aaaa'; ctx.fillRect(362, 380, 300, 80);
                 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 40px sans-serif';
                 ctx.fillText('REPLAY', 512, 435);
             }
@@ -101,26 +90,26 @@
             const tex = new THREE.CanvasTexture(canvas);
             const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false });
             const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3, 1.5), mat);
-            // プレイヤーの目の前に配置
-            mesh.position.set(0, 1.5, -3);
             return mesh;
         }
 
         let currentUIPanel = createUIPanel('START');
+        currentUIPanel.position.set(0, 1.5, -3);
         scene.add(currentUIPanel);
 
-        // --- 2. 巨大ボス「アトム・マザー」 ---
+        // --- 2. 巨大ボス ---
         const bossGroup = new THREE.Group();
         bossGroup.position.set(0, 8, -25); 
         scene.add(bossGroup);
-        bossGroup.visible = false; // 最初は非表示
+        bossGroup.visible = false;
 
         const coreGeo = new THREE.OctahedronGeometry(1.5, 2);
-        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true });
-        const bossCore = new THREE.Mesh(coreGeo, coreMat);
+        const bossCore = new THREE.Mesh(coreGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true }));
         bossGroup.add(bossCore);
 
         let armorPieces = [];
+        const particles = [];
+
         function initBoss() {
             armorPieces.forEach(a => bossGroup.remove(a));
             armorPieces = [];
@@ -143,7 +132,6 @@
             }
         }
 
-        const particles = [];
         function shatterArmor(armor) {
             armor.userData.isDead = true; armor.visible = false;
             for(let i=0; i<4; i++) {
@@ -155,31 +143,48 @@
             }
         }
 
-        // --- 3. ゲームループ制御 ---
+        // --- 3. ゲームループ制御（バグ修正済） ---
+        let resultGallery = null;
+
         function startGame() {
-            scene.remove(currentUIPanel);
-            if(resultGallery) { scene.remove(resultGallery); resultGallery = null; }
+            // UIパネルを完全に削除
+            if(currentUIPanel) {
+                scene.remove(currentUIPanel);
+                currentUIPanel.material.map.dispose();
+                currentUIPanel.material.dispose();
+                currentUIPanel.geometry.dispose();
+                currentUIPanel = null;
+            }
+            // ホログラム履歴を完全に削除
+            if(resultGallery) {
+                scene.remove(resultGallery);
+                resultGallery = null;
+            }
+
             strokeHistory = [];
+            // 残っているパーティクルも掃除
+            particles.forEach(p => scene.remove(p));
+            particles.length = 0;
+
             initBoss();
             startTime = clock.getElapsedTime();
             GAME_STATE = 'PLAYING';
-            // コントローラーのレーザーを消す
-            h1.laser.visible = false; h2.laser.visible = false;
+            
+            // レーザーとカーソルをオフ
+            h1.laser.visible = false; h1.cursor.visible = false;
+            h2.laser.visible = false; h2.cursor.visible = false;
         }
 
-        let resultGallery = null;
         function triggerResult() {
             GAME_STATE = 'RESULT';
             clearTime = (clock.getElapsedTime() - startTime).toFixed(1);
             bossGroup.visible = false;
 
-            // ランク計算
             let rank = 'C';
             if(clearTime < 30) rank = 'S';
             else if(clearTime < 60) rank = 'A';
             else if(clearTime < 90) rank = 'B';
 
-            // コア爆発
             const corePos = new THREE.Vector3(); bossCore.getWorldPosition(corePos);
             for(let i=0; i<50; i++) {
                 const p = new THREE.Mesh(new THREE.BoxGeometry(0.2,0.2,0.2), new THREE.MeshBasicMaterial({color: 0xffffff}));
@@ -188,7 +193,6 @@
                 scene.add(p); particles.push(p);
             }
 
-            // ホログラム表示
             resultGallery = new THREE.Group();
             resultGallery.position.set(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z - 1.5);
             strokeHistory.forEach((pts, index) => {
@@ -202,15 +206,12 @@
             });
             scene.add(resultGallery);
 
-            // UI表示
             currentUIPanel = createUIPanel('RESULT', { time: clearTime, rank: rank });
-            // プレイヤーの現在位置の前にパネルを出す
             currentUIPanel.position.set(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z - 2);
-            // プレイヤーの方を向かせる
             currentUIPanel.lookAt(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z);
             scene.add(currentUIPanel);
 
-            // コントローラーのレーザーを復活
+            // レーザーをオン
             h1.laser.visible = true; h2.laser.visible = true;
         }
 
@@ -225,10 +226,15 @@
             tip.position.z = -0.05;
             controller.add(tip);
 
-            // UI操作用のレーザーポインター
-            const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-10)]);
-            const laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+            // ★修正ポイント：動的に長さを変えられるレーザーとカーソル（丸）の追加
+            const laserGeo = new THREE.BufferGeometry();
+            laserGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 0,0,-10]), 3));
+            const laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
             controller.add(laser);
+
+            const cursor = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            cursor.visible = false;
+            controller.add(cursor);
 
             const matPreview = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
             const matWeapon = new THREE.MeshBasicMaterial({ color: colorHex });
@@ -237,22 +243,17 @@
 
             controller.addEventListener('selectstart', () => {
                 if(GAME_STATE === 'START' || GAME_STATE === 'RESULT') {
-                    // UIクリック判定
+                    if(!currentUIPanel) return;
                     const mat = new THREE.Matrix4().identity().extractRotation(controller.matrixWorld);
                     raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
                     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(mat);
                     const intersects = raycaster.intersectObject(currentUIPanel);
-                    if (intersects.length > 0) {
-                        // 雑な判定ですが、下半分のボタンエリアを撃ったら反応
-                        if (intersects[0].uv.y < 0.4) {
-                            if(GAME_STATE === 'START') startGame();
-                            else if(GAME_STATE === 'RESULT') startGame();
-                        }
+                    if (intersects.length > 0 && intersects[0].uv.y < 0.4) {
+                        startGame();
                     }
                     return;
                 }
 
-                // ゲーム中の描画処理
                 controller.userData.isDrawing = true;
                 controller.userData.pointsWorld = [];
                 if (controller.userData.previewMesh) { scene.remove(controller.userData.previewMesh); controller.userData.previewMesh = null; }
@@ -278,7 +279,7 @@
             controller.addEventListener('squeezestart', () => { if(GAME_STATE === 'PLAYING') controller.userData.isDashing = true; });
             controller.addEventListener('squeezeend', () => { controller.userData.isDashing = false; });
 
-            return { controller, tip, matPreview, laser };
+            return { controller, tip, matPreview, laser, cursor };
         }
 
         const h1 = setupController(0, 0x00ffff);
@@ -289,6 +290,32 @@
 
         renderer.setAnimationLoop(() => {
             const time = clock.getElapsedTime();
+
+            // ★修正ポイント：UIパネルへの動的レーザー判定（毎フレーム実行）
+            if (GAME_STATE === 'START' || GAME_STATE === 'RESULT') {
+                [h1, h2].forEach(hand => {
+                    if (currentUIPanel && hand.laser.visible) {
+                        const mat = new THREE.Matrix4().identity().extractRotation(hand.controller.matrixWorld);
+                        raycaster.ray.origin.setFromMatrixPosition(hand.controller.matrixWorld);
+                        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(mat);
+                        const intersects = raycaster.intersectObject(currentUIPanel);
+
+                        if (intersects.length > 0) {
+                            // パネルに当たったらレーザーを短くし、丸いカーソルを表示
+                            const dist = intersects[0].distance;
+                            hand.laser.geometry.attributes.position.array[5] = -dist;
+                            hand.laser.geometry.attributes.position.needsUpdate = true;
+                            hand.cursor.position.set(0, 0, -dist);
+                            hand.cursor.visible = true;
+                        } else {
+                            // 当たっていなければ長く伸ばし、カーソルを消す
+                            hand.laser.geometry.attributes.position.array[5] = -10;
+                            hand.laser.geometry.attributes.position.needsUpdate = true;
+                            hand.cursor.visible = false;
+                        }
+                    }
+                });
+            }
 
             if (GAME_STATE === 'PLAYING') {
                 bossGroup.position.y = 8 + Math.sin(time) * 1.0;
@@ -303,7 +330,6 @@
                     }
                 });
 
-                // ダッシュ移動
                 let isAnyDashing = false;
                 [h1, h2].forEach(hand => {
                     if (hand.controller.userData.isDashing) {
@@ -315,7 +341,6 @@
                 if (isAnyDashing) playerRig.position.add(dashVelocity);
                 else { dashVelocity.lerp(new THREE.Vector3(), 0.1); playerRig.position.add(dashVelocity); }
 
-                // 斬撃判定
                 [h1, h2].forEach(hand => {
                     const ctrl = hand.controller;
                     const tipPosWorld = new THREE.Vector3().setFromMatrixPosition(hand.tip.matrixWorld);
@@ -363,7 +388,6 @@
                 if(resultGallery) resultGallery.rotation.y += 0.005;
             }
 
-            // 破片処理
             for (let i = particles.length - 1; i >= 0; i--) {
                 const p = particles[i];
                 p.position.add(p.userData.velocity);
