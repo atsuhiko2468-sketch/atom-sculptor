@@ -2,105 +2,122 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Atom Sculptor: Unchained - Prototype</title>
-    <style>body { margin: 0; overflow: hidden; background: #000; }</style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atom Sculptor: Unchained</title>
+    <style>
+        body { margin: 0; background-color: #000; }
+        canvas { display: block; }
+    </style>
 </head>
 <body>
-    <script type="module">
-        import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
-        import { VRButton } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/webxr/VRButton.js';
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.136.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.136.0/examples/jsm/"
+            }
+        }
+    </script>
 
-        // --- シーン構築 ---
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+        // 1. シーン・カメラ・レンダラーの初期化
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000);
-        scene.fog = new THREE.Fog(0x000000, 2, 15);
-
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.xr.enabled = true;
         document.body.appendChild(renderer.domElement);
+
+        // 2. VRボタンの追加
         document.body.appendChild(VRButton.createButton(renderer));
 
-        // --- ネオン・ライティング ---
-        const amb = new THREE.AmbientLight(0x404040);
-        const point = new THREE.PointLight(0x00ffff, 2, 10);
-        scene.add(amb, point);
+        // 3. ライティング
+        const light = new THREE.DirectionalLight(0xff00ff, 1);
+        light.position.set(1, 10, 1);
+        scene.add(light, new THREE.AmbientLight(0x404040));
 
-        // --- ボスの生成 (結合体の塊) ---
+        // 4. ボスの破片（グリッド）の生成
         const fragments = [];
         const fragGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-        
-        function createBoss() {
-            for(let i = 0; i < 50; i++) {
-                const mat = new THREE.MeshBasicMaterial({ 
-                    color: i % 2 === 0 ? 0xff00ff : 0x00ffff, 
-                    wireframe: true 
-                });
-                const cube = new THREE.Mesh(fragGeo, mat);
-                cube.position.set(
-                    (Math.random() - 0.5) * 2,
-                    1.5 + (Math.random() - 0.5) * 2,
-                    -2 + (Math.random() - 0.5) * 2
-                );
-                cube.userData.velocity = new THREE.Vector3(0, 0, 0);
-                cube.userData.isDead = false;
-                scene.add(cube);
-                fragments.push(cube);
-            }
+        for(let i = 0; i < 60; i++) {
+            const mat = new THREE.MeshBasicMaterial({ 
+                color: i % 2 === 0 ? 0xff00ff : 0x00ffff, 
+                wireframe: true 
+            });
+            const cube = new THREE.Mesh(fragGeo, mat);
+            // プレイヤーの目の前（z = -2〜-4）に散りばめる
+            cube.position.set(
+                (Math.random() - 0.5) * 4,
+                1.5 + (Math.random() - 0.5) * 2,
+                -3 + (Math.random() - 0.5) * 2
+            );
+            cube.userData = { velocity: new THREE.Vector3(), isDead: false };
+            scene.add(cube);
+            fragments.push(cube);
         }
-        createBoss();
 
-        // --- 武器：光の刃 (Right Controller) ---
-        const controller = renderer.xr.getController(1); // 右手
-        scene.add(controller);
+        // 5. 両手のコントローラー設定
+        function createBlade(controller) {
+            const bladeGeo = new THREE.CylinderGeometry(0.01, 0.01, 1, 8);
+            const bladeMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+            const blade = new THREE.Mesh(bladeGeo, bladeMat);
+            blade.rotation.x = -Math.PI / 2;
+            blade.position.z = -0.5;
+            controller.add(blade);
+            return blade;
+        }
 
-        const bladeGeo = new THREE.CylinderGeometry(0.005, 0.02, 1, 8);
-        const bladeMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.8 });
-        const blade = new THREE.Mesh(bladeGeo, bladeMat);
-        blade.rotation.x = -Math.PI / 2;
-        blade.position.z = -0.5;
-        controller.add(blade);
+        const c0 = renderer.xr.getController(0);
+        scene.add(c0);
+        const blade0 = createBlade(c0);
 
-        // --- 解体（パージ）ロジック ---
-        function onSlicing() {
-            const bladeTip = new THREE.Vector3();
-            bladeTip.setFromMatrixPosition(blade.matrixWorld);
+        const c1 = renderer.xr.getController(1);
+        scene.add(c1);
+        const blade1 = createBlade(c1);
 
-            fragments.forEach(frag => {
-                if (!frag.userData.isDead) {
-                    const dist = bladeTip.distanceTo(frag.position);
-                    if (dist < 0.3) {
-                        // 解体開始！
+        // 6. メインループ
+        renderer.setAnimationLoop(() => {
+            // 当たり判定（両手分）
+            [blade0, blade1].forEach(b => {
+                const tip = new THREE.Vector3();
+                tip.setFromMatrixPosition(b.matrixWorld);
+                fragments.forEach(frag => {
+                    if (!frag.userData.isDead && tip.distanceTo(frag.position) < 0.25) {
                         frag.userData.isDead = true;
                         frag.userData.velocity.set(
-                            (Math.random() - 0.5) * 0.2,
-                            (Math.random() - 0.5) * 0.2,
-                            (Math.random() - 0.5) * 0.2
+                            (Math.random() - 0.5) * 0.1,
+                            (Math.random() - 0.5) * 0.1,
+                            (Math.random() - 0.5) * 0.1
                         );
                     }
-                }
+                });
             });
-        }
 
-        // --- メインループ ---
-        renderer.setAnimationLoop(() => {
-            onSlicing();
-
-            // 破片の挙動
+            // 破片のアニメーション
             fragments.forEach(frag => {
                 if (frag.userData.isDead) {
                     frag.position.add(frag.userData.velocity);
-                    frag.rotation.x += 0.1;
-                    frag.rotation.y += 0.1;
-                    frag.scale.multiplyScalar(0.98); // 徐々に消える（光の雪へ）
+                    frag.scale.multiplyScalar(0.95);
                 } else {
-                    // ボスの鼓動感
-                    frag.position.y += Math.sin(Date.now() * 0.002) * 0.002;
+                    frag.rotation.y += 0.01;
                 }
             });
 
             renderer.render(scene, camera);
+        });
+
+        // ウィンドウリサイズ対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
     </script>
