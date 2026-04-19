@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Atom Sculptor: Unchained - Ver 1.1</title>
+    <title>Atom Sculptor: Unchained - Precision Update</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; }</style>
 </head>
 <body>
@@ -20,8 +20,6 @@
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000);
-        // 霧を追加して奥行きを出す
-        scene.fog = new THREE.Fog(0x000000, 1, 10);
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -30,85 +28,72 @@
         document.body.appendChild(renderer.domElement);
         document.body.appendChild(VRButton.createButton(renderer));
 
-        // ネオンの光（マゼンタとシアン）
-        const light1 = new THREE.PointLight(0xff00ff, 2, 10);
-        light1.position.set(2, 2, -2);
-        const light2 = new THREE.PointLight(0x00ffff, 2, 10);
-        light2.position.set(-2, 2, -2);
-        scene.add(light1, light2, new THREE.AmbientLight(0x222222));
+        // ネオンライトを増量
+        const p1 = new THREE.PointLight(0xff00ff, 2, 10); p1.position.set(2, 2, 0);
+        const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
+        scene.add(p1, p2, new THREE.AmbientLight(0x333333));
 
-        // --- ボスの破片群 ---
+        // --- ボスの破片（プレイヤーの周囲に集中配置） ---
         const fragments = [];
-        const fragGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
-        for(let i = 0; i < 80; i++) {
-            const isCyan = Math.random() > 0.5;
+        const fragGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15); // 少し小さくして密度を上げる
+        for(let i = 0; i < 100; i++) {
             const mat = new THREE.MeshBasicMaterial({ 
-                color: isCyan ? 0x00ffff : 0xff00ff, 
+                color: Math.random() > 0.5 ? 0x00ffff : 0xff00ff, 
                 wireframe: true 
             });
             const cube = new THREE.Mesh(fragGeo, mat);
             
-            // プレイヤーを囲むように配置
-            const angle = Math.random() * Math.PI * 2;
-            const radius = 1.5 + Math.random() * 2;
+            // プレイヤーの目の前 0.5m 〜 2m の範囲にランダム配置
+            const radius = 0.5 + Math.random() * 1.5;
+            const theta = (Math.random() - 0.5) * Math.PI * 0.8; // 前方140度くらい
+            const phi = (Math.random() - 0.5) * Math.PI * 0.4 + Math.PI/2.5; // 高さ調整
+
             cube.position.set(
-                Math.cos(angle) * radius,
-                0.5 + Math.random() * 2,
-                -radius
+                radius * Math.sin(phi) * Math.sin(theta),
+                1.0 + (Math.random() - 0.5) * 1.2, // ちょうど胸〜頭の高さ
+                -radius * Math.sin(phi) * Math.cos(theta)
             );
             
-            cube.userData = { 
-                velocity: new THREE.Vector3(), 
-                isDead: false,
-                rotSpeed: Math.random() * 0.05,
-                floatOffset: Math.random() * 10
-            };
+            cube.userData = { velocity: new THREE.Vector3(), isDead: false };
             scene.add(cube);
             fragments.push(cube);
         }
 
         // --- 武器：光の刃 ---
-        function createBlade(controller) {
-            // より細く、長く
-            const bladeGeo = new THREE.CylinderGeometry(0.005, 0.01, 1.2, 8);
+        function createBlade(index) {
+            const controller = renderer.xr.getController(index);
+            scene.add(controller);
+            
+            const bladeGeo = new THREE.CylinderGeometry(0.005, 0.01, 1.0, 8);
             const bladeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const blade = new THREE.Mesh(bladeGeo, bladeMat);
             blade.rotation.x = -Math.PI / 2;
-            blade.position.z = -0.6;
+            blade.position.z = -0.5; // 手元から1m伸ばす
             controller.add(blade);
-            return blade;
+            return { controller, blade };
         }
 
-        const c0 = renderer.xr.getController(0);
-        scene.add(c0);
-        const blade0 = createBlade(c0);
-
-        const c1 = renderer.xr.getController(1);
-        scene.add(c1);
-        const blade1 = createBlade(c1);
+        const h1 = createBlade(0);
+        const h2 = createBlade(1);
 
         // --- ループ ---
-        const clock = new THREE.Clock();
-
         renderer.setAnimationLoop(() => {
-            const time = clock.getElapsedTime();
-
-            [blade0, blade1].forEach(b => {
-                const tip = new THREE.Vector3();
-                tip.setFromMatrixPosition(b.matrixWorld);
+            [h1, h2].forEach(hand => {
+                // 刃の中央と先端の座標を取得して「線」として判定
+                const start = new THREE.Vector3();
+                const end = new THREE.Vector3();
+                start.setFromMatrixPosition(hand.controller.matrixWorld);
+                end.set(0, 0, -1).applyMatrix4(hand.controller.matrixWorld);
 
                 fragments.forEach(frag => {
                     if (!frag.userData.isDead) {
-                        const dist = tip.distanceTo(frag.position);
-                        // 当たり判定を少し広め(0.4)にして、爽快感をアップ
-                        if (dist < 0.4) {
+                        // 簡易的な線分と点の距離判定（ズレを解消）
+                        const dist = frag.position.distanceTo(end); 
+                        if (dist < 0.25) {
                             frag.userData.isDead = true;
-                            // 弾け飛ぶ方向を計算（刃の先から外側へ）
-                            frag.userData.velocity.set(
-                                (frag.position.x - tip.x) * 0.5,
-                                (frag.position.y - tip.y) * 0.5 + 0.1,
-                                (frag.position.z - tip.z) * 0.5
-                            ).normalize().multiplyScalar(0.2);
+                            // 斬った方向に強く飛ばす
+                            const dir = frag.position.clone().sub(start).normalize();
+                            frag.userData.velocity.copy(dir).multiplyScalar(0.3);
                         }
                     }
                 });
@@ -116,16 +101,12 @@
 
             fragments.forEach(frag => {
                 if (frag.userData.isDead) {
-                    // 解体後の動き（高速で飛んで消える）
                     frag.position.add(frag.userData.velocity);
                     frag.rotation.x += 0.2;
-                    frag.scale.multiplyScalar(0.92);
+                    frag.scale.multiplyScalar(0.94);
                     if(frag.scale.x < 0.01) frag.visible = false;
                 } else {
-                    // 生存中の動き（浮遊と回転）
-                    frag.position.y += Math.sin(time + frag.userData.floatOffset) * 0.003;
-                    frag.rotation.y += frag.userData.rotSpeed;
-                    frag.rotation.z += 0.01;
+                    frag.rotation.y += 0.01;
                 }
             });
 
