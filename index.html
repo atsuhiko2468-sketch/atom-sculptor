@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Atom Sculptor: Unchained - Sculpt & Shatter</title>
+    <title>Atom Sculptor: Weapon Forge</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; }</style>
 </head>
 <body>
@@ -33,11 +33,11 @@
         const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
         scene.add(p1, p2, new THREE.AmbientLight(0x333333));
 
-        // --- 1. 敵（エネミー）と破片（パーティクル）の管理 ---
+        // --- 1. 敵と破片（シャッター）システム ---
         const enemies = [];
         const particles = [];
         const fragGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-        const particleGeo = new THREE.BoxGeometry(0.04, 0.04, 0.04); // 破片用ジオメトリ
+        const particleGeo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
 
         function spawnEnemy() {
             const isCyan = Math.random() > 0.5;
@@ -55,160 +55,168 @@
 
         for(let i = 0; i < 60; i++) spawnEnemy();
 
-        // 敵が破壊されたときの「シャッター（粉砕）」エフェクト
         function shatterEnemy(enemy) {
             enemy.userData.isDead = true;
-            enemy.visible = false; // 本体を消す
-
-            // 8つの小さな破片を生成
+            enemy.visible = false;
             for(let i = 0; i < 8; i++) {
-                const pMat = new THREE.MeshBasicMaterial({ color: enemy.userData.color });
-                const p = new THREE.Mesh(particleGeo, pMat);
+                const p = new THREE.Mesh(particleGeo, new THREE.MeshBasicMaterial({ color: enemy.userData.color }));
                 p.position.copy(enemy.position);
-                
-                // 爆発するようにランダムな方向へ飛ばす
                 p.userData = {
-                    velocity: new THREE.Vector3(
-                        (Math.random() - 0.5) * 0.1,
-                        (Math.random() - 0.5) * 0.1,
-                        (Math.random() - 0.5) * 0.1
-                    ),
-                    life: 1.0 // 寿命（スケールダウン用）
+                    velocity: new THREE.Vector3((Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15),
+                    life: 1.0
                 };
                 scene.add(p);
                 particles.push(p);
             }
         }
 
-        // --- 2. スカルプト（光の軌跡）システム ---
-        const trails = []; // 描かれた軌跡のリスト
-        
-        function setupController(index) {
+        // --- 2. スカルプト・ウェポン・システム ---
+        function setupController(index, colorHex) {
             const controller = renderer.xr.getController(index);
             scene.add(controller);
 
-            // 手元のポインター（筆先）
-            const tip = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            tip.position.z = -0.1;
+            // ペン先（筆の先端）
+            const tip = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            tip.position.z = -0.05;
             controller.add(tip);
 
-            controller.userData = { isDrawing: false, lastPos: new THREE.Vector3(), activeTrail: null };
+            const matPreview = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+            const matWeapon = new THREE.MeshBasicMaterial({ color: colorHex });
 
-            // トリガー操作で描画開始/終了
+            // コントローラーに状態を持たせる
+            controller.userData = { 
+                isDrawing: false, 
+                pointsWorld: [], 
+                previewMesh: null, 
+                weaponMesh: null 
+            };
+
             controller.addEventListener('selectstart', () => {
                 controller.userData.isDrawing = true;
-                controller.userData.lastPos.setFromMatrixPosition(tip.matrixWorld);
+                controller.userData.pointsWorld = []; // 軌跡をリセット
                 
-                // 新しい軌跡（Line）を作成
-                const material = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0, linewidth: 3 });
-                const geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(300), 3)); // 最大100頂点
-                const line = new THREE.Line(geometry, material);
-                scene.add(line);
-                
-                controller.userData.activeTrail = {
-                    mesh: line,
-                    points: [controller.userData.lastPos.clone()],
-                    age: 0,
-                    isFinished: false
-                };
-                trails.push(controller.userData.activeTrail);
+                if (controller.userData.previewMesh) {
+                    scene.remove(controller.userData.previewMesh);
+                    controller.userData.previewMesh.geometry.dispose();
+                    controller.userData.previewMesh = null;
+                }
             });
 
             controller.addEventListener('selectend', () => {
                 controller.userData.isDrawing = false;
-                if(controller.userData.activeTrail) {
-                    controller.userData.activeTrail.isFinished = true; // 描画終了、寿命カウントダウン開始
+                const ptsWorld = controller.userData.pointsWorld;
+                
+                // プレビューを消す
+                if (controller.userData.previewMesh) {
+                    scene.remove(controller.userData.previewMesh);
+                    controller.userData.previewMesh.geometry.dispose();
+                    controller.userData.previewMesh = null;
+                }
+
+                // 点が2つ以上あれば「武器」として実体化
+                if (ptsWorld.length > 1) {
+                    // 古い武器があれば消去
+                    if (controller.userData.weaponMesh) {
+                        controller.remove(controller.userData.weaponMesh);
+                        controller.userData.weaponMesh.geometry.dispose();
+                    }
+
+                    // 描いた軌跡(ワールド座標)を、今のコントローラーのローカル座標に変換して固定する
+                    const ptsLocal = ptsWorld.map(p => {
+                        const lp = p.clone();
+                        controller.worldToLocal(lp);
+                        return lp;
+                    });
+
+                    // 武器メッシュの生成（立体的なチューブ）
+                    const curve = new THREE.CatmullRomCurve3(ptsLocal);
+                    const tubeGeo = new THREE.TubeGeometry(curve, ptsLocal.length * 2, 0.015, 8, false);
+                    const weapon = new THREE.Mesh(tubeGeo, matWeapon);
+                    
+                    // 当たり判定用にローカルの点群を保存
+                    weapon.userData.pointsLocal = ptsLocal; 
+                    controller.add(weapon); // 手元にアタッチ！
+                    controller.userData.weaponMesh = weapon;
                 }
             });
 
-            return { controller, tip };
+            return { controller, tip, matPreview };
         }
 
-        const h1 = setupController(0);
-        const h2 = setupController(1);
+        // 左手はシアン、右手はマゼンタの武器を生成
+        const h1 = setupController(0, 0x00ffff);
+        const h2 = setupController(1, 0xff00ff);
 
-        // --- 3. メインループ（最適化された判定とライフサイクル） ---
+        // --- 3. メインループ ---
         const clock = new THREE.Clock();
 
         renderer.setAnimationLoop(() => {
             const time = clock.getElapsedTime();
-            const delta = clock.getDelta();
 
-            // スカルプト描画処理
             [h1, h2].forEach(hand => {
                 const ctrl = hand.controller;
-                const currentPos = new THREE.Vector3().setFromMatrixPosition(hand.tip.matrixWorld);
+                const tipPosWorld = new THREE.Vector3().setFromMatrixPosition(hand.tip.matrixWorld);
 
-                if (ctrl.userData.isDrawing && ctrl.userData.activeTrail) {
-                    const trail = ctrl.userData.activeTrail;
-                    // 前回位置から一定距離離れたら頂点を追加
-                    if (currentPos.distanceTo(ctrl.userData.lastPos) > 0.05 && trail.points.length < 100) {
-                        trail.points.push(currentPos.clone());
+                // 【描画中】軌跡の更新とプレビュー表示
+                if (ctrl.userData.isDrawing) {
+                    const pts = ctrl.userData.pointsWorld;
+                    // 前の点から2cm以上離れたら頂点を追加
+                    if (pts.length === 0 || tipPosWorld.distanceTo(pts[pts.length - 1]) > 0.02) {
+                        pts.push(tipPosWorld.clone());
                         
-                        // BufferGeometryの更新
-                        const positions = trail.mesh.geometry.attributes.position.array;
-                        for(let i=0; i<trail.points.length; i++) {
-                            positions[i*3] = trail.points[i].x;
-                            positions[i*3+1] = trail.points[i].y;
-                            positions[i*3+2] = trail.points[i].z;
-                        }
-                        trail.mesh.geometry.setDrawRange(0, trail.points.length);
-                        trail.mesh.geometry.attributes.position.needsUpdate = true;
-                        
-                        ctrl.userData.lastPos.copy(currentPos);
-                    }
-
-                    // --- 高速移動向け当たり判定（最新の線分で敵を斬る） ---
-                    if (trail.points.length > 1) {
-                        const pStart = trail.points[trail.points.length - 2];
-                        const pEnd = trail.points[trail.points.length - 1];
-                        const lineSegment = new THREE.Line3(pStart, pEnd);
-                        const closest = new THREE.Vector3();
-
-                        enemies.forEach(enemy => {
-                            if (!enemy.userData.isDead) {
-                                lineSegment.closestPointToPoint(enemy.position, true, closest);
-                                if (closest.distanceTo(enemy.position) < 0.2) {
-                                    shatterEnemy(enemy); // 接触した敵を粉砕！
-                                }
+                        // プレビュー用チューブの再生成
+                        if (pts.length > 1) {
+                            if (ctrl.userData.previewMesh) {
+                                scene.remove(ctrl.userData.previewMesh);
+                                ctrl.userData.previewMesh.geometry.dispose();
                             }
-                        });
+                            const curve = new THREE.CatmullRomCurve3(pts);
+                            const tubeGeo = new THREE.TubeGeometry(curve, pts.length * 2, 0.01, 8, false);
+                            ctrl.userData.previewMesh = new THREE.Mesh(tubeGeo, hand.matPreview);
+                            scene.add(ctrl.userData.previewMesh);
+                        }
+                    }
+                }
+
+                // 【戦闘中】生成された武器と敵の当たり判定
+                if (ctrl.userData.weaponMesh) {
+                    const ptsLocal = ctrl.userData.weaponMesh.userData.pointsLocal;
+                    if (ptsLocal && ptsLocal.length > 1) {
+                        // 武器を構成するすべての「線分」で当たり判定を行う（トンネル抜け防止）
+                        for (let i = 0; i < ptsLocal.length - 1; i++) {
+                            // ローカル座標を現在のワールド座標に変換
+                            const pStart = ptsLocal[i].clone().applyMatrix4(ctrl.matrixWorld);
+                            const pEnd = ptsLocal[i+1].clone().applyMatrix4(ctrl.matrixWorld);
+                            const lineSegment = new THREE.Line3(pStart, pEnd);
+                            const closest = new THREE.Vector3();
+
+                            enemies.forEach(enemy => {
+                                if (!enemy.userData.isDead) {
+                                    lineSegment.closestPointToPoint(enemy.position, true, closest);
+                                    if (closest.distanceTo(enemy.position) < 0.15) {
+                                        shatterEnemy(enemy); // 斬撃ヒット！
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             });
 
-            // 軌跡のライフサイクル管理（数秒後に消滅）
-            for (let i = trails.length - 1; i >= 0; i--) {
-                const trail = trails[i];
-                if (trail.isFinished) {
-                    trail.age += 0.02;
-                    trail.mesh.material.opacity = 1.0 - (trail.age / 2.0); // 2秒かけてフェードアウト
-                    
-                    if (trail.age >= 2.0) {
-                        scene.remove(trail.mesh);
-                        trail.mesh.geometry.dispose();
-                        trail.mesh.material.dispose();
-                        trails.splice(i, 1);
-                    }
-                }
-            }
-
-            // 破片（パーティクル）の物理挙動
+            // 破片の物理挙動
             for (let i = particles.length - 1; i >= 0; i--) {
                 const p = particles[i];
                 p.position.add(p.userData.velocity);
                 p.rotation.x += 0.2;
                 p.userData.life -= 0.02;
                 p.scale.setScalar(p.userData.life);
-                
                 if(p.userData.life <= 0) {
                     scene.remove(p);
                     particles.splice(i, 1);
                 }
             }
 
-            // 敵の浮遊とスポーン管理
+            // 敵の浮遊とスポーン
             let activeCount = 0;
             for (let i = enemies.length - 1; i >= 0; i--) {
                 const enemy = enemies[i];
@@ -221,7 +229,6 @@
                     enemy.rotation.y += enemy.userData.rotSpeed;
                 }
             }
-
             if (activeCount < 30) {
                 for(let i = 0; i < 60 - enemies.length; i++) spawnEnemy();
             }
