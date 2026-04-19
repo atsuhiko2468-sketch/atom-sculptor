@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Atom Sculptor: Weapon Forge</title>
+    <title>Atom Sculptor: Absorb & Dash</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; }</style>
 </head>
 <body>
@@ -20,9 +20,16 @@
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000);
-        scene.fog = new THREE.Fog(0x000000, 1, 8);
+        scene.fog = new THREE.Fog(0x000000, 1, 15);
         
+        // --- プレイヤーリグ（移動用グループ） ---
+        // VRでプレイヤー自身を移動させるための土台を作ります
+        const playerRig = new THREE.Group();
+        scene.add(playerRig);
+
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        playerRig.add(camera);
+
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.xr.enabled = true;
@@ -31,51 +38,63 @@
 
         const p1 = new THREE.PointLight(0xff00ff, 2, 10); p1.position.set(2, 2, 0);
         const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
-        scene.add(p1, p2, new THREE.AmbientLight(0x333333));
+        playerRig.add(p1, p2, new THREE.AmbientLight(0x333333)); // 光も一緒に移動
 
-        // --- 1. 敵と破片（シャッター）システム ---
+        // --- 状態管理 ---
+        let currentWeaponRadius = 0.01; // 初期の武器の太さ（吸収で成長）
+        let dashVelocity = new THREE.Vector3(); // ダッシュのスピード
+
+        // --- 1. 敵と破片システム ---
         const enemies = [];
         const particles = [];
-        const fragGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-        const particleGeo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
+        const fragGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        const particleGeo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
 
-        function spawnEnemy() {
+        function spawnEnemy(distanceOffset = 0) {
             const isCyan = Math.random() > 0.5;
             const mat = new THREE.MeshBasicMaterial({ color: isCyan ? 0x00ffff : 0xff00ff, wireframe: true });
             const enemy = new THREE.Mesh(fragGeo, mat);
             
             const angle = Math.random() * Math.PI * 2;
-            const radius = 0.5 + Math.random() * 2.0;
-            enemy.position.set(Math.cos(angle) * radius, 0.5 + Math.random() * 1.5, Math.sin(angle) * radius);
+            const radius = 1.0 + Math.random() * 3.0 + distanceOffset; // プレイヤーの周りに生成
+            
+            // プレイヤーの現在位置を基準に配置
+            const playerPos = playerRig.position;
+            enemy.position.set(
+                playerPos.x + Math.cos(angle) * radius, 
+                0.5 + Math.random() * 2.0, 
+                playerPos.z + Math.sin(angle) * radius
+            );
             
             enemy.userData = { isDead: false, rotSpeed: (Math.random() - 0.5) * 0.05, floatOffset: Math.random() * 10, color: mat.color };
             scene.add(enemy);
             enemies.push(enemy);
         }
 
-        for(let i = 0; i < 60; i++) spawnEnemy();
+        for(let i = 0; i < 80; i++) spawnEnemy();
 
         function shatterEnemy(enemy) {
             enemy.userData.isDead = true;
             enemy.visible = false;
-            for(let i = 0; i < 8; i++) {
+            // 破片を散らす
+            for(let i = 0; i < 5; i++) {
                 const p = new THREE.Mesh(particleGeo, new THREE.MeshBasicMaterial({ color: enemy.userData.color }));
                 p.position.copy(enemy.position);
+                // 散らばるベクトル
                 p.userData = {
-                    velocity: new THREE.Vector3((Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15, (Math.random() - 0.5) * 0.15),
-                    life: 1.0
+                    velocity: new THREE.Vector3((Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2),
+                    state: 'scatter' // scatter -> homing
                 };
                 scene.add(p);
                 particles.push(p);
             }
         }
 
-        // --- 2. スカルプト・ウェポン・システム ---
+        // --- 2. スカルプト＆ダッシュ システム ---
         function setupController(index, colorHex) {
             const controller = renderer.xr.getController(index);
-            scene.add(controller);
+            playerRig.add(controller); // コントローラーもリグに入れる
 
-            // ペン先（筆の先端）
             const tip = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
             tip.position.z = -0.05;
             controller.add(tip);
@@ -83,21 +102,20 @@
             const matPreview = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
             const matWeapon = new THREE.MeshBasicMaterial({ color: colorHex });
 
-            // コントローラーに状態を持たせる
             controller.userData = { 
                 isDrawing: false, 
+                isDashing: false,
                 pointsWorld: [], 
                 previewMesh: null, 
                 weaponMesh: null 
             };
 
+            // トリガー（人差し指）: 描画
             controller.addEventListener('selectstart', () => {
                 controller.userData.isDrawing = true;
-                controller.userData.pointsWorld = []; // 軌跡をリセット
-                
+                controller.userData.pointsWorld = [];
                 if (controller.userData.previewMesh) {
                     scene.remove(controller.userData.previewMesh);
-                    controller.userData.previewMesh.geometry.dispose();
                     controller.userData.previewMesh = null;
                 }
             });
@@ -106,44 +124,42 @@
                 controller.userData.isDrawing = false;
                 const ptsWorld = controller.userData.pointsWorld;
                 
-                // プレビューを消す
                 if (controller.userData.previewMesh) {
                     scene.remove(controller.userData.previewMesh);
-                    controller.userData.previewMesh.geometry.dispose();
                     controller.userData.previewMesh = null;
                 }
 
-                // 点が2つ以上あれば「武器」として実体化
                 if (ptsWorld.length > 1) {
-                    // 古い武器があれば消去
-                    if (controller.userData.weaponMesh) {
-                        controller.remove(controller.userData.weaponMesh);
-                        controller.userData.weaponMesh.geometry.dispose();
-                    }
+                    if (controller.userData.weaponMesh) controller.remove(controller.userData.weaponMesh);
 
-                    // 描いた軌跡(ワールド座標)を、今のコントローラーのローカル座標に変換して固定する
                     const ptsLocal = ptsWorld.map(p => {
                         const lp = p.clone();
                         controller.worldToLocal(lp);
                         return lp;
                     });
 
-                    // 武器メッシュの生成（立体的なチューブ）
                     const curve = new THREE.CatmullRomCurve3(ptsLocal);
-                    const tubeGeo = new THREE.TubeGeometry(curve, ptsLocal.length * 2, 0.015, 8, false);
+                    // ここで成長した currentWeaponRadius を使う！
+                    const tubeGeo = new THREE.TubeGeometry(curve, ptsLocal.length * 2, currentWeaponRadius, 8, false);
                     const weapon = new THREE.Mesh(tubeGeo, matWeapon);
                     
-                    // 当たり判定用にローカルの点群を保存
                     weapon.userData.pointsLocal = ptsLocal; 
-                    controller.add(weapon); // 手元にアタッチ！
+                    controller.add(weapon);
                     controller.userData.weaponMesh = weapon;
                 }
+            });
+
+            // グリップ（中指）: 超高速ダッシュ
+            controller.addEventListener('squeezestart', () => {
+                controller.userData.isDashing = true;
+            });
+            controller.addEventListener('squeezeend', () => {
+                controller.userData.isDashing = false;
             });
 
             return { controller, tip, matPreview };
         }
 
-        // 左手はシアン、右手はマゼンタの武器を生成
         const h1 = setupController(0, 0x00ffff);
         const h2 = setupController(1, 0xff00ff);
 
@@ -152,39 +168,56 @@
 
         renderer.setAnimationLoop(() => {
             const time = clock.getElapsedTime();
+            const cameraPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
 
+            // ダッシュ処理（中指グリップ）
+            let isAnyDashing = false;
+            [h1, h2].forEach(hand => {
+                if (hand.controller.userData.isDashing) {
+                    isAnyDashing = true;
+                    // コントローラーの向いている方向（Z軸マイナス）を取得
+                    const dashDir = new THREE.Vector3(0, 0, -1).applyQuaternion(hand.controller.quaternion).normalize();
+                    // プレイヤーリグをその方向へ高速移動
+                    dashVelocity.lerp(dashDir.multiplyScalar(0.2), 0.1); 
+                }
+            });
+
+            if (isAnyDashing) {
+                playerRig.position.add(dashVelocity);
+            } else {
+                // ブレーキ
+                dashVelocity.lerp(new THREE.Vector3(0,0,0), 0.1);
+                playerRig.position.add(dashVelocity);
+            }
+
+            // スカルプト描画と判定
             [h1, h2].forEach(hand => {
                 const ctrl = hand.controller;
                 const tipPosWorld = new THREE.Vector3().setFromMatrixPosition(hand.tip.matrixWorld);
 
-                // 【描画中】軌跡の更新とプレビュー表示
                 if (ctrl.userData.isDrawing) {
                     const pts = ctrl.userData.pointsWorld;
-                    // 前の点から2cm以上離れたら頂点を追加
                     if (pts.length === 0 || tipPosWorld.distanceTo(pts[pts.length - 1]) > 0.02) {
                         pts.push(tipPosWorld.clone());
-                        
-                        // プレビュー用チューブの再生成
                         if (pts.length > 1) {
-                            if (ctrl.userData.previewMesh) {
-                                scene.remove(ctrl.userData.previewMesh);
-                                ctrl.userData.previewMesh.geometry.dispose();
-                            }
+                            if (ctrl.userData.previewMesh) scene.remove(ctrl.userData.previewMesh);
                             const curve = new THREE.CatmullRomCurve3(pts);
-                            const tubeGeo = new THREE.TubeGeometry(curve, pts.length * 2, 0.01, 8, false);
-                            ctrl.userData.previewMesh = new THREE.Mesh(tubeGeo, hand.matPreview);
+                            ctrl.userData.previewMesh = new THREE.Mesh(
+                                new THREE.TubeGeometry(curve, pts.length * 2, currentWeaponRadius, 8, false), 
+                                hand.matPreview
+                            );
                             scene.add(ctrl.userData.previewMesh);
                         }
                     }
                 }
 
-                // 【戦闘中】生成された武器と敵の当たり判定
                 if (ctrl.userData.weaponMesh) {
                     const ptsLocal = ctrl.userData.weaponMesh.userData.pointsLocal;
                     if (ptsLocal && ptsLocal.length > 1) {
-                        // 武器を構成するすべての「線分」で当たり判定を行う（トンネル抜け防止）
+                        // 武器が太くなるほど当たり判定も大きくなる
+                        const hitRadius = currentWeaponRadius * 5.0 + 0.1;
+
                         for (let i = 0; i < ptsLocal.length - 1; i++) {
-                            // ローカル座標を現在のワールド座標に変換
                             const pStart = ptsLocal[i].clone().applyMatrix4(ctrl.matrixWorld);
                             const pEnd = ptsLocal[i+1].clone().applyMatrix4(ctrl.matrixWorld);
                             const lineSegment = new THREE.Line3(pStart, pEnd);
@@ -193,8 +226,8 @@
                             enemies.forEach(enemy => {
                                 if (!enemy.userData.isDead) {
                                     lineSegment.closestPointToPoint(enemy.position, true, closest);
-                                    if (closest.distanceTo(enemy.position) < 0.15) {
-                                        shatterEnemy(enemy); // 斬撃ヒット！
+                                    if (closest.distanceTo(enemy.position) < hitRadius) {
+                                        shatterEnemy(enemy);
                                     }
                                 }
                             });
@@ -203,20 +236,34 @@
                 }
             });
 
-            // 破片の物理挙動
+            // 破片の吸収アニメーション（アブソーブ）
             for (let i = particles.length - 1; i >= 0; i--) {
                 const p = particles[i];
-                p.position.add(p.userData.velocity);
-                p.rotation.x += 0.2;
-                p.userData.life -= 0.02;
-                p.scale.setScalar(p.userData.life);
-                if(p.userData.life <= 0) {
-                    scene.remove(p);
-                    particles.splice(i, 1);
+                
+                if (p.userData.state === 'scatter') {
+                    // 最初は散らばる
+                    p.position.add(p.userData.velocity);
+                    p.userData.velocity.multiplyScalar(0.9); // 空気抵抗
+                    if (p.userData.velocity.lengthSq() < 0.001) p.userData.state = 'homing';
+                } else {
+                    // その後、プレイヤー（カメラ）に向かって飛んでくる！
+                    p.position.lerp(cameraPos, 0.08);
+                    
+                    // 吸収判定（近づいたら消えて、武器が太くなる）
+                    if (p.position.distanceTo(cameraPos) < 0.3) {
+                        scene.remove(p);
+                        particles.splice(i, 1);
+                        // 武器を太くする（最大0.08まで）
+                        if (currentWeaponRadius < 0.08) {
+                            currentWeaponRadius += 0.0005;
+                        }
+                    }
                 }
+                p.rotation.x += 0.2;
+                p.rotation.y += 0.2;
             }
 
-            // 敵の浮遊とスポーン
+            // 敵の浮遊とスポーン管理（移動に合わせて前方にスポーンさせる）
             let activeCount = 0;
             for (let i = enemies.length - 1; i >= 0; i--) {
                 const enemy = enemies[i];
@@ -227,10 +274,16 @@
                     activeCount++;
                     enemy.position.y += Math.sin(time * 3 + enemy.userData.floatOffset) * 0.002;
                     enemy.rotation.y += enemy.userData.rotSpeed;
+                    
+                    // プレイヤーから離れすぎた敵は消す（リソース節約）
+                    if (enemy.position.distanceTo(playerRig.position) > 20) {
+                        enemy.userData.isDead = true;
+                    }
                 }
             }
-            if (activeCount < 30) {
-                for(let i = 0; i < 60 - enemies.length; i++) spawnEnemy();
+            if (activeCount < 60) {
+                // ダッシュ中は前方に敵を生成し続ける
+                for(let i = 0; i < 80 - activeCount; i++) spawnEnemy(dashVelocity.length() > 0.05 ? 10 : 0);
             }
 
             renderer.render(scene, camera);
