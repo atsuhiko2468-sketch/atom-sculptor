@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Atom Sculptor: Unchained - Precision Update</title>
+    <title>Atom Sculptor: Unchained - Infinite Spawner</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; }</style>
 </head>
 <body>
@@ -20,6 +20,7 @@
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x000000);
+        scene.fog = new THREE.Fog(0x000000, 1, 8); // 遠くの敵が暗闇から現れる演出
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -28,35 +29,48 @@
         document.body.appendChild(renderer.domElement);
         document.body.appendChild(VRButton.createButton(renderer));
 
-        // ネオンライトを増量
+        // ネオンライト
         const p1 = new THREE.PointLight(0xff00ff, 2, 10); p1.position.set(2, 2, 0);
         const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
         scene.add(p1, p2, new THREE.AmbientLight(0x333333));
 
-        // --- ボスの破片（プレイヤーの周囲に集中配置） ---
+        // --- 敵（フラグメント）の管理 ---
         const fragments = [];
-        const fragGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15); // 少し小さくして密度を上げる
-        for(let i = 0; i < 100; i++) {
-            const mat = new THREE.MeshBasicMaterial({ 
-                color: Math.random() > 0.5 ? 0x00ffff : 0xff00ff, 
-                wireframe: true 
-            });
-            const cube = new THREE.Mesh(fragGeo, mat);
+        const fragGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+        const matCyan = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
+        const matMagenta = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
+
+        // 敵を1体生成する関数（360度配置）
+        function spawnEnemy() {
+            const isCyan = Math.random() > 0.5;
+            const cube = new THREE.Mesh(fragGeo, isCyan ? matCyan : matMagenta);
             
-            // プレイヤーの目の前 0.5m 〜 2m の範囲にランダム配置
-            const radius = 0.5 + Math.random() * 1.5;
-            const theta = (Math.random() - 0.5) * Math.PI * 0.8; // 前方140度くらい
-            const phi = (Math.random() - 0.5) * Math.PI * 0.4 + Math.PI/2.5; // 高さ調整
+            // 角度（0〜360度）と距離（0.5m〜2.5m）をランダムに決定
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 0.5 + Math.random() * 2.0;
+            const height = 0.5 + Math.random() * 1.5; // 膝〜頭の高さ
 
             cube.position.set(
-                radius * Math.sin(phi) * Math.sin(theta),
-                1.0 + (Math.random() - 0.5) * 1.2, // ちょうど胸〜頭の高さ
-                -radius * Math.sin(phi) * Math.cos(theta)
+                Math.cos(angle) * radius,
+                height,
+                Math.sin(angle) * radius
             );
             
-            cube.userData = { velocity: new THREE.Vector3(), isDead: false };
+            // 固有の動きデータを付与
+            cube.userData = { 
+                velocity: new THREE.Vector3(), 
+                isDead: false,
+                rotSpeed: (Math.random() - 0.5) * 0.05,
+                floatOffset: Math.random() * 10
+            };
             scene.add(cube);
             fragments.push(cube);
+        }
+
+        // 初期スポーン（最初は80体）
+        const MAX_ENEMIES = 80;
+        for(let i = 0; i < MAX_ENEMIES; i++) {
+            spawnEnemy();
         }
 
         // --- 武器：光の刃 ---
@@ -68,7 +82,7 @@
             const bladeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const blade = new THREE.Mesh(bladeGeo, bladeMat);
             blade.rotation.x = -Math.PI / 2;
-            blade.position.z = -0.5; // 手元から1m伸ばす
+            blade.position.z = -0.5;
             controller.add(blade);
             return { controller, blade };
         }
@@ -76,39 +90,70 @@
         const h1 = createBlade(0);
         const h2 = createBlade(1);
 
-        // --- ループ ---
+        // --- メインループ ---
+        const clock = new THREE.Clock();
+
         renderer.setAnimationLoop(() => {
+            const time = clock.getElapsedTime();
+
+            // 1. 当たり判定（Line3を使って棒全体で判定）
             [h1, h2].forEach(hand => {
-                // 刃の中央と先端の座標を取得して「線」として判定
                 const start = new THREE.Vector3();
                 const end = new THREE.Vector3();
                 start.setFromMatrixPosition(hand.controller.matrixWorld);
-                end.set(0, 0, -1).applyMatrix4(hand.controller.matrixWorld);
+                end.set(0, 0, -1.0).applyMatrix4(hand.controller.matrixWorld);
+                
+                const bladeLine = new THREE.Line3(start, end);
+                const closestPoint = new THREE.Vector3();
 
                 fragments.forEach(frag => {
                     if (!frag.userData.isDead) {
-                        // 簡易的な線分と点の距離判定（ズレを解消）
-                        const dist = frag.position.distanceTo(end); 
-                        if (dist < 0.25) {
+                        // 刃の線分上で、ブロックに一番近い点を取得
+                        bladeLine.closestPointToPoint(frag.position, true, closestPoint);
+                        const dist = frag.position.distanceTo(closestPoint);
+                        
+                        if (dist < 0.2) {
                             frag.userData.isDead = true;
-                            // 斬った方向に強く飛ばす
+                            // 切られた方向へ吹き飛ばす
                             const dir = frag.position.clone().sub(start).normalize();
-                            frag.userData.velocity.copy(dir).multiplyScalar(0.3);
+                            frag.userData.velocity.copy(dir).multiplyScalar(0.4);
                         }
                     }
                 });
             });
 
-            fragments.forEach(frag => {
+            // 2. 敵の動きと削除処理（逆順ループで安全に配列から消す）
+            let activeCount = 0;
+            for (let i = fragments.length - 1; i >= 0; i--) {
+                const frag = fragments[i];
+
                 if (frag.userData.isDead) {
+                    // 死亡時のアニメーション
                     frag.position.add(frag.userData.velocity);
                     frag.rotation.x += 0.2;
-                    frag.scale.multiplyScalar(0.94);
-                    if(frag.scale.x < 0.01) frag.visible = false;
+                    frag.scale.multiplyScalar(0.92);
+                    
+                    // 見えなくなったらシーンと配列から完全に削除
+                    if(frag.scale.x < 0.01) {
+                        scene.remove(frag);
+                        fragments.splice(i, 1);
+                    }
                 } else {
-                    frag.rotation.y += 0.01;
+                    // 生存時のアニメーション（鼓動）
+                    activeCount++;
+                    frag.position.y += Math.sin(time * 3 + frag.userData.floatOffset) * 0.002;
+                    frag.rotation.y += frag.userData.rotSpeed;
                 }
-            });
+            }
+
+            // 3. 無限スポーン処理
+            // 生きている敵が40体を下回ったら、一気に補充する
+            if (activeCount < 40) {
+                const spawnCount = MAX_ENEMIES - fragments.length;
+                for(let i = 0; i < spawnCount; i++) {
+                    spawnEnemy();
+                }
+            }
 
             renderer.render(scene, camera);
         });
