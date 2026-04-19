@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
-// 分割したui.jsから関数を読み込む！
+// 分割したui.jsから関数を読み込む
 import { createUIPanel } from './ui.js';
 
 const scene = new THREE.Scene();
@@ -30,12 +30,11 @@ const WEAPON_RADIUS = 0.015;
 let startTime = 0;
 let clearTime = 0;
 
-// ★外部ファイル(ui.js)の関数を使ってパネルを作る
 let currentUIPanel = createUIPanel('START');
 currentUIPanel.position.set(0, 1.5, -3);
 scene.add(currentUIPanel);
 
-// --- 巨大ボス ---
+// --- 巨大ボスとヒューマノイド・エネミー ---
 const bossGroup = new THREE.Group();
 bossGroup.position.set(0, 8, -25); 
 scene.add(bossGroup);
@@ -47,10 +46,86 @@ bossGroup.add(bossCore);
 
 let armorPieces = [];
 const particles = [];
+const enemies = []; // 突進してくるヒューマノイド用配列
+
+// ★ ワイヤーフレームの「人型」を生成する関数
+function createHumanoidModel(colorHex) {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: colorHex, wireframe: true });
+
+    // 頭
+    const head = new THREE.Mesh(new THREE.OctahedronGeometry(0.15), mat);
+    head.position.y = 0.7;
+    group.add(head);
+
+    // 胴体
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.1, 0.6, 4), mat);
+    body.position.y = 0.3;
+    group.add(body);
+
+    // 腕
+    const armGeo = new THREE.BoxGeometry(0.08, 0.5, 0.08);
+    const leftArm = new THREE.Mesh(armGeo, mat);
+    leftArm.position.set(-0.35, 0.3, 0);
+    leftArm.rotation.z = Math.PI / 8;
+    group.add(leftArm);
+
+    const rightArm = new THREE.Mesh(armGeo, mat);
+    rightArm.position.set(0.35, 0.3, 0);
+    rightArm.rotation.z = -Math.PI / 8;
+    group.add(rightArm);
+
+    // 脚
+    const legGeo = new THREE.BoxGeometry(0.1, 0.6, 0.1);
+    const leftLeg = new THREE.Mesh(legGeo, mat);
+    leftLeg.position.set(-0.15, -0.3, 0);
+    group.add(leftLeg);
+
+    const rightLeg = new THREE.Mesh(legGeo, mat);
+    rightLeg.position.set(0.15, -0.3, 0);
+    group.add(rightLeg);
+
+    group.userData.limbs = { leftArm, rightArm, leftLeg, rightLeg };
+    return group;
+}
+
+function spawnHumanoid() {
+    const color = Math.random() > 0.5 ? 0x00ffff : 0xff00ff;
+    const enemy = createHumanoidModel(color);
+    
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 15.0 + Math.random() * 10.0;
+    const playerPos = playerRig.position;
+    
+    enemy.position.set(
+        playerPos.x + Math.cos(angle) * radius, 
+        playerPos.y + 0.5 + Math.random() * 2.0, 
+        playerPos.z + Math.sin(angle) * radius
+    );
+
+    const targetPos = new THREE.Vector3(playerPos.x, playerPos.y + 1.5, playerPos.z);
+    targetPos.x += (Math.random() - 0.5) * 2.0; 
+    const moveDir = targetPos.clone().sub(enemy.position).normalize();
+    
+    enemy.lookAt(targetPos);
+
+    enemy.userData = { 
+        isDead: false, 
+        velocity: moveDir.multiplyScalar(0.08 + Math.random() * 0.05),
+        color: color,
+        animOffset: Math.random() * Math.PI * 2
+    };
+    
+    scene.add(enemy);
+    enemies.push(enemy);
+}
 
 function initBoss() {
     armorPieces.forEach(a => bossGroup.remove(a));
     armorPieces = [];
+    enemies.forEach(e => scene.remove(e));
+    enemies.length = 0;
+    
     bossCore.visible = true;
     bossGroup.visible = true;
     bossGroup.position.set(0, 8, -25);
@@ -68,15 +143,26 @@ function initBoss() {
         bossGroup.add(armor);
         armorPieces.push(armor);
     }
+
+    for(let i=0; i<30; i++) spawnHumanoid();
 }
 
-function shatterArmor(armor) {
-    armor.userData.isDead = true; armor.visible = false;
-    for(let i=0; i<4; i++) {
-        const p = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.1), new THREE.MeshBasicMaterial({color: armor.material.color}));
-        const worldPos = new THREE.Vector3(); armor.getWorldPosition(worldPos);
+function shatterEnemy(enemyObj, isHumanoid = false) {
+    enemyObj.userData.isDead = true; 
+    enemyObj.visible = false;
+    const color = isHumanoid ? enemyObj.userData.color : enemyObj.material.color;
+    
+    const pCount = isHumanoid ? 10 : 4;
+    for(let i=0; i<pCount; i++) {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshBasicMaterial({color: color}));
+        const worldPos = new THREE.Vector3(); 
+        enemyObj.getWorldPosition(worldPos);
+        if(isHumanoid) {
+            worldPos.x += (Math.random() - 0.5) * 0.5;
+            worldPos.y += (Math.random() - 0.5) * 0.5;
+        }
         p.position.copy(worldPos);
-        p.userData = { velocity: new THREE.Vector3((Math.random()-0.5)*0.3, (Math.random()-0.5)*0.3, (Math.random()-0.5)*0.3), life: 1.0 };
+        p.userData = { velocity: new THREE.Vector3((Math.random()-0.5)*0.4, (Math.random()-0.5)*0.4, (Math.random()-0.5)*0.4), life: 1.0 };
         scene.add(p); particles.push(p);
     }
 }
@@ -92,7 +178,10 @@ function startGame() {
         currentUIPanel.geometry.dispose();
         currentUIPanel = null; 
     }
-    if(resultGallery) { scene.remove(resultGallery); resultGallery = null; }
+    if(resultGallery) { 
+        scene.remove(resultGallery); 
+        resultGallery = null; 
+    }
     
     strokeHistory = [];
     particles.forEach(p => scene.remove(p));
@@ -112,6 +201,7 @@ function triggerResult() {
     GAME_STATE = 'RESULT';
     clearTime = (clock.getElapsedTime() - startTime).toFixed(1);
     bossGroup.visible = false;
+    enemies.forEach(e => { e.visible = false; e.userData.isDead = true; });
 
     let rank = 'C';
     if(clearTime < 30) rank = 'S';
@@ -139,7 +229,6 @@ function triggerResult() {
     });
     scene.add(resultGallery);
 
-    // ★外部ファイル(ui.js)の関数を使ってリザルトパネルを作る
     currentUIPanel = createUIPanel('RESULT', { time: clearTime, rank: rank });
     currentUIPanel.position.set(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z - 2);
     currentUIPanel.lookAt(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z);
@@ -179,7 +268,7 @@ function setupController(index, colorHex) {
             raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
             raycaster.ray.direction.set(0, 0, -1).applyMatrix4(mat);
             const intersects = raycaster.intersectObject(currentUIPanel);
-            if (intersects.length > 0 && intersects[0].uv.y < 0.4) startGame();
+            if (intersects.length > 0) startGame();
             return;
         }
 
@@ -256,6 +345,34 @@ renderer.setAnimationLoop(() => {
             }
         });
 
+        // ヒューマノイドの突進とアニメーション
+        let activeHumanoids = 0;
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            if (enemy.userData.isDead) {
+                scene.remove(enemy);
+                enemies.splice(i, 1);
+            } else {
+                activeHumanoids++;
+                enemy.position.add(enemy.userData.velocity);
+                
+                const animSpeed = time * 15 + enemy.userData.animOffset;
+                const limbs = enemy.userData.limbs;
+                if(limbs) {
+                    limbs.leftArm.rotation.x = Math.sin(animSpeed) * 0.5;
+                    limbs.rightArm.rotation.x = -Math.sin(animSpeed) * 0.5;
+                    limbs.leftLeg.rotation.x = -Math.sin(animSpeed) * 0.5;
+                    limbs.rightLeg.rotation.x = Math.sin(animSpeed) * 0.5;
+                }
+
+                if (enemy.position.distanceTo(playerRig.position) > 40) {
+                    enemy.userData.isDead = true;
+                }
+            }
+        }
+        
+        if (activeHumanoids < 25) spawnHumanoid();
+
         let isAnyDashing = false;
         [h1, h2].forEach(hand => {
             if (hand.controller.userData.isDashing) {
@@ -293,11 +410,18 @@ renderer.setAnimationLoop(() => {
                         const line = new THREE.Line3(pStart, pEnd);
                         const closest = new THREE.Vector3();
 
+                        enemies.forEach(enemy => {
+                            if (!enemy.userData.isDead) {
+                                line.closestPointToPoint(enemy.position, true, closest);
+                                if (closest.distanceTo(enemy.position) < hitRadius + 0.5) shatterEnemy(enemy, true);
+                            }
+                        });
+
                         armorPieces.forEach(armor => {
                             if (!armor.userData.isDead) {
                                 const wPos = new THREE.Vector3(); armor.getWorldPosition(wPos);
                                 line.closestPointToPoint(wPos, true, closest);
-                                if (closest.distanceTo(wPos) < hitRadius + 0.3) shatterArmor(armor);
+                                if (closest.distanceTo(wPos) < hitRadius + 0.3) shatterEnemy(armor, false);
                             }
                         });
 
