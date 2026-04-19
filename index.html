@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Astro Sculptor: UX Polished</title>
+    <title>Astro Sculptor: UX Enhanced</title>
     <style>body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }</style>
 </head>
 <body>
@@ -37,15 +37,14 @@
         const p2 = new THREE.PointLight(0x00ffff, 2, 10); p2.position.set(-2, 2, 0);
         playerRig.add(p1, p2, new THREE.AmbientLight(0x333333));
 
-        let GAME_STATE = 'START'; 
+        // --- 状態管理 ---
+        let GAME_STATE = 'START'; // 'START', 'PLAYING', 'RESULT'
         let strokeHistory = []; 
         let dashVelocity = new THREE.Vector3();
         const WEAPON_RADIUS = 0.015;
-        let startTime = 0;
-        let clearTime = 0;
 
         // --- 1. 3D UIパネルジェネレーター ---
-        function createUIPanel(type, data = {}) {
+        function createUIPanel(type) {
             const canvas = document.createElement('canvas');
             canvas.width = 1024; canvas.height = 512;
             const ctx = canvas.getContext('2d');
@@ -72,14 +71,6 @@
                 ctx.shadowBlur = 20; ctx.shadowColor = '#ffff00';
                 ctx.fillStyle = '#ffdd00'; ctx.font = 'bold 80px sans-serif';
                 ctx.fillText('STAGE CLEAR!', 512, 120);
-
-                ctx.shadowColor = 'transparent';
-                ctx.fillStyle = '#ffffff'; ctx.font = '40px sans-serif';
-                ctx.fillText(`CLEAR TIME: ${data.time} sec`, 512, 220);
-                
-                ctx.shadowBlur = 30; ctx.shadowColor = '#ff00ff';
-                ctx.fillStyle = '#ff88ff'; ctx.font = 'bold 70px sans-serif';
-                ctx.fillText(`RANK: ${data.rank}`, 512, 300);
 
                 ctx.shadowBlur = 15; ctx.shadowColor = '#00ffff';
                 ctx.fillStyle = '#00aaaa'; ctx.fillRect(362, 380, 300, 80);
@@ -143,47 +134,23 @@
             }
         }
 
-        // --- 3. ゲームループ制御（バグ修正済） ---
+        // --- 3. ゲームループ制御 ---
         let resultGallery = null;
 
         function startGame() {
-            // UIパネルを完全に削除
-            if(currentUIPanel) {
-                scene.remove(currentUIPanel);
-                currentUIPanel.material.map.dispose();
-                currentUIPanel.material.dispose();
-                currentUIPanel.geometry.dispose();
-                currentUIPanel = null;
-            }
-            // ホログラム履歴を完全に削除
-            if(resultGallery) {
-                scene.remove(resultGallery);
-                resultGallery = null;
-            }
-
+            if(currentUIPanel) { scene.remove(currentUIPanel); currentUIPanel = null; }
+            if(resultGallery) { scene.remove(resultGallery); resultGallery = null; }
             strokeHistory = [];
-            // 残っているパーティクルも掃除
-            particles.forEach(p => scene.remove(p));
-            particles.length = 0;
-
             initBoss();
-            startTime = clock.getElapsedTime();
             GAME_STATE = 'PLAYING';
-            
-            // レーザーとカーソルをオフ
-            h1.laser.visible = false; h1.cursor.visible = false;
-            h2.laser.visible = false; h2.cursor.visible = false;
+            // コントローラーのレーザーを隠す
+            h1.laser.visible = false; h1.tipCursor.visible = false;
+            h2.laser.visible = false; h2.tipCursor.visible = false;
         }
 
         function triggerResult() {
             GAME_STATE = 'RESULT';
-            clearTime = (clock.getElapsedTime() - startTime).toFixed(1);
             bossGroup.visible = false;
-
-            let rank = 'C';
-            if(clearTime < 30) rank = 'S';
-            else if(clearTime < 60) rank = 'A';
-            else if(clearTime < 90) rank = 'B';
 
             const corePos = new THREE.Vector3(); bossCore.getWorldPosition(corePos);
             for(let i=0; i<50; i++) {
@@ -206,12 +173,12 @@
             });
             scene.add(resultGallery);
 
-            currentUIPanel = createUIPanel('RESULT', { time: clearTime, rank: rank });
+            currentUIPanel = createUIPanel('RESULT');
             currentUIPanel.position.set(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z - 2);
             currentUIPanel.lookAt(playerRig.position.x, playerRig.position.y + 1.5, playerRig.position.z);
             scene.add(currentUIPanel);
 
-            // レーザーをオン
+            // コントローラーのレーザーをオン
             h1.laser.visible = true; h2.laser.visible = true;
         }
 
@@ -226,15 +193,14 @@
             tip.position.z = -0.05;
             controller.add(tip);
 
-            // ★修正ポイント：動的に長さを変えられるレーザーとカーソル（丸）の追加
-            const laserGeo = new THREE.BufferGeometry();
-            laserGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 0,0,-10]), 3));
-            const laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
+            // 【新機能】長いレーザー（Line）と、先端の白い丸（Sphere）のセットを追加
+            const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-10)]);
+            const laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
             controller.add(laser);
 
-            const cursor = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            cursor.visible = false;
-            controller.add(cursor);
+            const tipCursor = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            tipCursor.visible = false; // 最初は隠しておく
+            controller.add(tipCursor);
 
             const matPreview = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
             const matWeapon = new THREE.MeshBasicMaterial({ color: colorHex });
@@ -279,7 +245,7 @@
             controller.addEventListener('squeezestart', () => { if(GAME_STATE === 'PLAYING') controller.userData.isDashing = true; });
             controller.addEventListener('squeezeend', () => { controller.userData.isDashing = false; });
 
-            return { controller, tip, matPreview, laser, cursor };
+            return { controller, tip, matPreview, laser, tipCursor };
         }
 
         const h1 = setupController(0, 0x00ffff);
@@ -291,27 +257,24 @@
         renderer.setAnimationLoop(() => {
             const time = clock.getElapsedTime();
 
-            // ★修正ポイント：UIパネルへの動的レーザー判定（毎フレーム実行）
+            // 【新機能】UIパネルへのレーザー当たり判定（カーソルの表示切り替え）
             if (GAME_STATE === 'START' || GAME_STATE === 'RESULT') {
                 [h1, h2].forEach(hand => {
-                    if (currentUIPanel && hand.laser.visible) {
+                    if (currentUIPanel) {
                         const mat = new THREE.Matrix4().identity().extractRotation(hand.controller.matrixWorld);
                         raycaster.ray.origin.setFromMatrixPosition(hand.controller.matrixWorld);
                         raycaster.ray.direction.set(0, 0, -1).applyMatrix4(mat);
                         const intersects = raycaster.intersectObject(currentUIPanel);
 
                         if (intersects.length > 0) {
-                            // パネルに当たったらレーザーを短くし、丸いカーソルを表示
+                            // 当たったら「先端の白い丸」を表示し、当たった位置に配置
+                            hand.tipCursor.visible = true;
+                            // コントローラーから当たった場所までの距離を計算してSphereを配置
                             const dist = intersects[0].distance;
-                            hand.laser.geometry.attributes.position.array[5] = -dist;
-                            hand.laser.geometry.attributes.position.needsUpdate = true;
-                            hand.cursor.position.set(0, 0, -dist);
-                            hand.cursor.visible = true;
+                            hand.tipCursor.position.set(0, 0, -dist);
                         } else {
-                            // 当たっていなければ長く伸ばし、カーソルを消す
-                            hand.laser.geometry.attributes.position.array[5] = -10;
-                            hand.laser.geometry.attributes.position.needsUpdate = true;
-                            hand.cursor.visible = false;
+                            // 当たっていなければ「先端の白い丸」を隠す
+                            hand.tipCursor.visible = false;
                         }
                     }
                 });
@@ -330,6 +293,7 @@
                     }
                 });
 
+                // ダッシュ移動
                 let isAnyDashing = false;
                 [h1, h2].forEach(hand => {
                     if (hand.controller.userData.isDashing) {
@@ -341,6 +305,7 @@
                 if (isAnyDashing) playerRig.position.add(dashVelocity);
                 else { dashVelocity.lerp(new THREE.Vector3(), 0.1); playerRig.position.add(dashVelocity); }
 
+                // 斬撃判定
                 [h1, h2].forEach(hand => {
                     const ctrl = hand.controller;
                     const tipPosWorld = new THREE.Vector3().setFromMatrixPosition(hand.tip.matrixWorld);
@@ -388,6 +353,7 @@
                 if(resultGallery) resultGallery.rotation.y += 0.005;
             }
 
+            // 破片処理
             for (let i = particles.length - 1; i >= 0; i--) {
                 const p = particles[i];
                 p.position.add(p.userData.velocity);
